@@ -99,6 +99,16 @@ module Isuconp
         end
       end
 
+      def preload_users(user_ids)
+        return {} if user_ids.empty?
+        
+        placeholders = (['?'] * user_ids.length).join(',')
+        
+        users = db.prepare("SELECT * FROM `users` WHERE `id` IN (#{placeholders})").execute(*user_ids).to_a
+        
+        users.each_with_object({}) { |user, hash| hash[user[:id]] = user }
+      end
+
       def make_posts(results, all_comments: false)
         posts = []
         results.to_a.each do |post|
@@ -113,19 +123,25 @@ module Isuconp
           comments = db.prepare(query).execute(
             post[:id]
           ).to_a
+          
+          comment_user_ids = comments.map { |c| c[:user_id] }
+          comment_users = preload_users(comment_user_ids)
           comments.each do |comment|
-            comment[:user] = db.prepare('SELECT * FROM `users` WHERE `id` = ?').execute(
-              comment[:user_id]
-            ).first
+            comment[:user] = comment_users[comment[:user_id]]
           end
           post[:comments] = comments.reverse
 
-          post[:user] = db.prepare('SELECT * FROM `users` WHERE `id` = ?').execute(
-            post[:user_id]
-          ).first
-
-          posts.push(post) if post[:user][:del_flg] == 0
+          posts.push(post)
           break if posts.length >= POSTS_PER_PAGE
+        end
+
+        post_user_ids = posts.map { |p| p[:user_id] }
+        post_users = preload_users(post_user_ids)
+        
+        posts.select! { |post| post_users[post[:user_id]][:del_flg] == 0 }
+        
+        posts.each do |post|
+          post[:user] = post_users[post[:user_id]]
         end
 
         posts
